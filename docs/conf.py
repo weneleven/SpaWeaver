@@ -1,8 +1,14 @@
 from pathlib import Path
 import sys
+import types
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+repo_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(repo_root))
+
+spaweaver_package = types.ModuleType("SpaWeaver")
+spaweaver_package.__path__ = [str(repo_root)]
+sys.modules.setdefault("SpaWeaver", spaweaver_package)
 
 project = "SpaWeaver"
 author = "SpaWeaver contributors"
