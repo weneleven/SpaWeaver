@@ -5,6 +5,30 @@ import torch.nn.functional as F
 
 
 class RBF(nn.Module):
+    """Radial basis function kernel module used by MMD-based losses.
+
+    The module computes a multi-scale Gaussian RBF kernel matrix for a batch of
+    input embeddings. If ``bandwidth`` is not provided, the bandwidth is
+    estimated from the pairwise squared Euclidean distances in the current
+    batch. Multiple bandwidth multipliers are summed to make the kernel less
+    sensitive to a single scale choice.
+
+    Parameters
+    ----------
+    n_kernels : int, default=5
+        Number of Gaussian kernels with different bandwidth multipliers.
+    mul_factor : float, default=2.0
+        Multiplicative factor used to space the bandwidth scales.
+    bandwidth : float or None, default=None
+        Fixed kernel bandwidth. When ``None``, the bandwidth is estimated from
+        the input batch during the forward pass.
+
+    Notes
+    -----
+    ``forward(X)`` expects a tensor of shape ``(n_samples, n_features)`` and
+    returns a kernel matrix of shape ``(n_samples, n_samples)``.
+    """
+
     def __init__(self, n_kernels=5, mul_factor=2.0, bandwidth=None):
         super().__init__()
         self.bandwidth_multipliers = mul_factor ** (torch.arange(n_kernels) - n_kernels // 2)
@@ -64,6 +88,46 @@ def gelu(x):
 
 
 class transformerModel(nn.Module):
+    """Transformer encoder for aggregating a target node and its neighbors.
+
+    The model takes a sequence-like tensor containing the representation of a
+    target node followed by its multi-hop or sampled neighbor representations.
+    Stacked encoder layers refine the sequence, then an attention layer learns
+    how much each neighbor contributes to the target representation. The final
+    output is the target embedding combined with the attention-weighted neighbor
+    embedding.
+
+    Parameters
+    ----------
+    hops : int
+        Number of neighbor hops represented in the input sequence. The expected
+        sequence length is ``hops + 1``: one target node plus its neighbors.
+    input_dim : int
+        Input feature dimension kept for compatibility with the training
+        pipeline. The current implementation expects the input tensor features
+        to already match ``hidden_dim``.
+    n_layers : int, default=6
+        Number of transformer encoder layers.
+    num_heads : int, default=8
+        Number of attention heads in each encoder layer.
+    hidden_dim : int, default=64
+        Hidden feature dimension used by the transformer layers.
+    ffn_dim : int, default=64
+        Feed-forward dimension argument kept for API compatibility. Internally
+        the model uses ``2 * hidden_dim``.
+    dropout_rate : float, default=0.0
+        Dropout probability applied after self-attention and feed-forward
+        blocks.
+    attention_dropout_rate : float, default=0.1
+        Dropout probability applied to attention weights.
+
+    Notes
+    -----
+    ``forward(batched_data)`` expects a tensor with shape
+    ``(batch_size, hops + 1, hidden_dim)`` and returns a tensor with shape
+    ``(batch_size, hidden_dim)`` for batched inputs.
+    """
+
     def __init__(
             self,
             hops,
