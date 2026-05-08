@@ -5,36 +5,105 @@ import torch.nn.functional as F
 
 
 class RBF(nn.Module):
-    """Radial basis function kernel module used by MMD-based losses.
+    """Compute a multi-scale radial basis function kernel matrix.
 
-    The module computes a multi-scale Gaussian RBF kernel matrix for a batch of
-    input embeddings. If ``bandwidth`` is not provided, the bandwidth is
-    estimated from the pairwise squared Euclidean distances in the current
-    batch. Multiple bandwidth multipliers are summed to make the kernel less
-    sensitive to a single scale choice.
+    ``RBF`` is a ``torch.nn.Module`` used to convert a feature matrix into a
+    sample-by-sample Gaussian kernel similarity matrix. It computes pairwise
+    squared Euclidean distances with ``torch.cdist`` and evaluates several
+    bandwidth scales. The kernel matrices from all scales are summed.
 
     Parameters
     ----------
     n_kernels : int, default=5
-        Number of Gaussian kernels with different bandwidth multipliers.
+        Number of Gaussian kernels with different bandwidth scales.
     mul_factor : float, default=2.0
-        Multiplicative factor used to space the bandwidth scales.
+        Multiplicative factor used to space adjacent bandwidth scales.
     bandwidth : float or None, default=None
-        Fixed kernel bandwidth. When ``None``, the bandwidth is estimated from
-        the input batch during the forward pass.
+        Fixed base bandwidth. If ``None``, the base bandwidth is estimated from
+        the pairwise squared distance matrix during ``forward``.
+
+    Attributes
+    ----------
+    bandwidth_multipliers : torch.Tensor
+        Tensor of shape ``(n_kernels,)`` containing the bandwidth scale
+        multipliers.
+    bandwidth : float or None
+        Fixed base bandwidth, or ``None`` when batch-wise bandwidth estimation
+        is used.
+
+    Methods
+    -------
+    get_bandwidth(L2_distances)
+        Return the fixed or batch-estimated base bandwidth.
+    forward(X)
+        Compute the summed multi-scale RBF kernel matrix.
 
     Notes
     -----
-    ``forward(X)`` expects a tensor of shape ``(n_samples, n_features)`` and
-    returns a kernel matrix of shape ``(n_samples, n_samples)``.
+    ``forward`` expects ``X`` to be a ``torch.Tensor`` with shape
+    ``(n_samples, n_features)``. ``bandwidth_multipliers`` is moved to
+    ``X.device`` inside ``forward`` before kernel values are computed.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from SpaWeaver.model import RBF
+    >>> kernel = RBF(n_kernels=3)
+    >>> X = torch.randn(4, 8)
+    >>> K = kernel(X)
+    >>> K.shape
+    torch.Size([4, 4])
     """
 
     def __init__(self, n_kernels=5, mul_factor=2.0, bandwidth=None):
+        """Initialize the multi-scale RBF kernel.
+
+        Parameters
+        ----------
+        n_kernels : int, default=5
+            Number of Gaussian kernels with different bandwidth scales.
+        mul_factor : float, default=2.0
+            Multiplicative factor used to construct
+            ``bandwidth_multipliers`` as
+            ``mul_factor ** (torch.arange(n_kernels) - n_kernels // 2)``.
+        bandwidth : float or None, default=None
+            Fixed base bandwidth. If ``None``, ``get_bandwidth`` estimates the
+            bandwidth from the pairwise squared distance matrix passed during
+            ``forward``.
+
+        Attributes
+        ----------
+        bandwidth_multipliers : torch.Tensor
+            One-dimensional tensor with ``n_kernels`` scale multipliers.
+        bandwidth : float or None
+            Stored fixed bandwidth or ``None`` for batch-wise estimation.
+        """
         super().__init__()
         self.bandwidth_multipliers = mul_factor ** (torch.arange(n_kernels) - n_kernels // 2)
         self.bandwidth = bandwidth
 
     def get_bandwidth(self, L2_distances):
+        """Return the bandwidth used by the RBF kernel.
+
+        Parameters
+        ----------
+        L2_distances : torch.Tensor
+            Pairwise squared Euclidean distance matrix with shape
+            ``(n_samples, n_samples)``.
+
+        Returns
+        -------
+        float or torch.Tensor
+            If ``self.bandwidth`` is not ``None``, returns that fixed value.
+            Otherwise returns ``L2_distances.data.sum() / (n_samples ** 2 -
+            n_samples)``.
+
+        Notes
+        -----
+        This method assumes ``L2_distances`` is already on the device used by
+        the current ``forward`` call. The diagonal entries produced by
+        ``torch.cdist(X, X) ** 2`` are zero.
+        """
         if self.bandwidth is None:
             n_samples = L2_distances.shape[0]
             return L2_distances.data.sum() / (n_samples ** 2 - n_samples)
@@ -42,6 +111,27 @@ class RBF(nn.Module):
         return self.bandwidth
 
     def forward(self, X):
+        """Compute the summed multi-scale RBF kernel matrix.
+
+        Parameters
+        ----------
+        X : torch.Tensor
+            Input feature matrix with shape ``(n_samples, n_features)``. The
+            tensor should contain numeric features and must be a PyTorch tensor.
+
+        Returns
+        -------
+        torch.Tensor
+            Kernel matrix with shape ``(n_samples, n_samples)``. Entry
+            ``(i, j)`` is the summed multi-scale RBF similarity between samples
+            ``X[i]`` and ``X[j]``.
+
+        Notes
+        -----
+        ``bandwidth_multipliers`` is moved to ``X.device`` inside this method.
+        The pairwise distance matrix, estimated bandwidth, and output kernel are
+        computed on the same device as ``X``.
+        """
         self.bandwidth_multipliers = self.bandwidth_multipliers.to(X.device)
         L2_distances = torch.cdist(X, X) ** 2
         return torch.exp(-L2_distances[None, ...] / (self.get_bandwidth(L2_distances) * self.bandwidth_multipliers)[:, None, None]).sum(dim=0)
@@ -88,44 +178,88 @@ def gelu(x):
 
 
 class transformerModel(nn.Module):
-    """Transformer encoder for aggregating a target node and its neighbors.
+    """Aggregate a target representation with neighboring representations.
 
-    The model takes a sequence-like tensor containing the representation of a
-    target node followed by its multi-hop or sampled neighbor representations.
-    Stacked encoder layers refine the sequence, then an attention layer learns
-    how much each neighbor contributes to the target representation. The final
-    output is the target embedding combined with the attention-weighted neighbor
-    embedding.
+    ``transformerModel`` is a ``torch.nn.Module`` that applies stacked
+    transformer encoder layers to a fixed-length sequence. The first sequence
+    position is treated as the target node and the remaining positions are
+    treated as neighbors. After the encoder stack, the model computes
+    target-conditioned attention weights over the neighbors and adds the
+    weighted neighbor summary to the encoded target representation.
 
     Parameters
     ----------
     hops : int
-        Number of neighbor hops represented in the input sequence. The expected
-        sequence length is ``hops + 1``: one target node plus its neighbors.
+        Number of neighbor positions represented in the input sequence. The
+        model sets ``seq_len = hops + 1``.
     input_dim : int
-        Input feature dimension kept for compatibility with the training
-        pipeline. The current implementation expects the input tensor features
-        to already match ``hidden_dim``.
+        Input feature dimension stored as an attribute. The current
+        implementation does not project from ``input_dim`` and expects the last
+        dimension of ``batched_data`` to match ``hidden_dim``.
     n_layers : int, default=6
-        Number of transformer encoder layers.
+        Number of encoder layers.
     num_heads : int, default=8
         Number of attention heads in each encoder layer.
     hidden_dim : int, default=64
-        Hidden feature dimension used by the transformer layers.
+        Hidden feature dimension used by attention, layer normalization,
+        feed-forward layers, and target-neighbor aggregation.
     ffn_dim : int, default=64
-        Feed-forward dimension argument kept for API compatibility. Internally
-        the model uses ``2 * hidden_dim``.
+        Constructor argument kept for API compatibility. The implementation
+        sets ``self.ffn_dim = 2 * hidden_dim`` regardless of this value.
     dropout_rate : float, default=0.0
         Dropout probability applied after self-attention and feed-forward
         blocks.
     attention_dropout_rate : float, default=0.1
-        Dropout probability applied to attention weights.
+        Dropout probability applied inside multi-head attention.
+
+    Attributes
+    ----------
+    seq_len : int
+        Expected sequence length, equal to ``hops + 1``.
+    input_dim : int
+        Stored input feature dimension.
+    hidden_dim : int
+        Hidden feature dimension.
+    ffn_dim : int
+        Feed-forward dimension used by encoder layers, equal to
+        ``2 * hidden_dim`` in the current implementation.
+    num_heads : int
+        Number of attention heads.
+    n_layers : int
+        Number of encoder layers.
+    layers : torch.nn.ModuleList
+        List of ``EncoderLayer`` modules.
+    final_ln : torch.nn.LayerNorm
+        Final layer normalization applied to the encoded sequence.
+    attn_layer : torch.nn.Linear
+        Linear layer mapping concatenated target-neighbor features of size
+        ``2 * hidden_dim`` to one attention score.
+    scaling : torch.nn.Parameter
+        Learnable scalar initialized to ``0.5``. It is defined by the module but
+        is not used in ``forward``.
+
+    Methods
+    -------
+    forward(batched_data)
+        Encode a target-neighbor sequence and return an aggregated target
+        representation.
 
     Notes
     -----
-    ``forward(batched_data)`` expects a tensor with shape
-    ``(batch_size, hops + 1, hidden_dim)`` and returns a tensor with shape
-    ``(batch_size, hidden_dim)`` for batched inputs.
+    ``forward`` expects ``batched_data`` to be a ``torch.Tensor`` whose last
+    dimension is ``hidden_dim`` and whose sequence length is ``hops + 1``. All
+    model parameters and input tensors must be on compatible devices, following
+    standard PyTorch module behavior.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from SpaWeaver.model import transformerModel
+    >>> model = transformerModel(hops=3, input_dim=64, hidden_dim=64)
+    >>> x = torch.randn(2, 4, 64)
+    >>> y = model(x)
+    >>> y.shape
+    torch.Size([2, 64])
     """
 
     def __init__(
@@ -139,6 +273,44 @@ class transformerModel(nn.Module):
             dropout_rate=0.0,
             attention_dropout_rate=0.1
     ):
+        """Initialize the transformer aggregation model.
+
+        Parameters
+        ----------
+        hops : int
+            Number of neighbor positions represented in the input sequence.
+            The model expects sequence length ``hops + 1`` in ``forward``.
+        input_dim : int
+            Input feature dimension stored as ``self.input_dim``. The current
+            code does not use this value to build an input projection.
+        n_layers : int, default=6
+            Number of ``EncoderLayer`` blocks.
+        num_heads : int, default=8
+            Number of attention heads in each ``EncoderLayer``.
+        hidden_dim : int, default=64
+            Hidden feature dimension. ``batched_data`` passed to ``forward`` is
+            expected to have this size in its last dimension.
+        ffn_dim : int, default=64
+            API-compatible argument. The implementation sets ``self.ffn_dim`` to
+            ``2 * hidden_dim`` and does not otherwise use this argument.
+        dropout_rate : float, default=0.0
+            Dropout probability passed to each ``EncoderLayer`` for residual
+            dropout after attention and feed-forward blocks.
+        attention_dropout_rate : float, default=0.1
+            Dropout probability passed to multi-head attention.
+
+        Attributes
+        ----------
+        seq_len : int
+            ``hops + 1``.
+        layers : torch.nn.ModuleList
+            Encoder stack containing ``n_layers`` modules.
+        final_ln : torch.nn.LayerNorm
+            Final sequence-level layer normalization.
+        attn_layer : torch.nn.Linear
+            Linear layer that maps concatenated target-neighbor features to one
+            scalar attention logit per neighbor.
+        """
         super().__init__()
 
         self.seq_len = hops + 1
@@ -161,6 +333,33 @@ class transformerModel(nn.Module):
         self.apply(lambda module: init_params(module, n_layers=n_layers))
 
     def forward(self, batched_data):
+        """Encode a target-neighbor sequence.
+
+        Parameters
+        ----------
+        batched_data : torch.Tensor
+            Input tensor with expected shape ``(batch_size, hops + 1,
+            hidden_dim)``. The first sequence position is interpreted as the
+            target representation. The remaining ``hops`` positions are
+            interpreted as neighboring representations. The tensor should be on
+            the same device as the model parameters.
+
+        Returns
+        -------
+        torch.Tensor
+            Aggregated target representation. For input with ``batch_size > 1``
+            and no other singleton dimensions, the expected shape is
+            ``(batch_size, hidden_dim)``. The implementation calls ``squeeze()``
+            before returning, so singleton dimensions, including a batch
+            dimension of size ``1``, may be removed.
+
+        Notes
+        -----
+        The method first applies all encoder layers and ``final_ln``. It then
+        computes neighbor attention by concatenating the encoded target token
+        with each encoded neighbor token, applying ``attn_layer``, and
+        normalizing over the neighbor dimension with ``softmax``.
+        """
         tensor = batched_data
 
         for enc_layer in self.layers:
