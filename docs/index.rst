@@ -10,6 +10,8 @@ image-embedding handling, and transformer-based modeling.
 
    installation
    quickstart
+   rbf
+   transformer_model
    api
 
 Indices and Tables
