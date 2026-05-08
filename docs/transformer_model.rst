@@ -2,9 +2,9 @@ Transformer Model
 =================
 
 ``transformerModel`` is a PyTorch module for aggregating a target node
-representation with its neighboring node representations. It is designed for
-graph-style spatial data where each target observation is represented together
-with sampled or multi-hop neighbors.
+representation with a fixed-length set of neighboring representations. It is
+designed for graph-style spatial data where each target observation is
+represented together with contextual neighbor embeddings.
 
 The model receives a sequence tensor whose first position is the target node and
 whose remaining positions are neighbors. Transformer encoder layers refine the
@@ -109,6 +109,10 @@ For batched input, the output shape is:
 .. code-block:: text
 
    output: Tensor[batch_size, hidden_dim]
+
+The implementation calls ``squeeze()`` before returning the output. Therefore,
+if ``batch_size`` is ``1``, singleton dimensions can be removed from the
+returned tensor.
 
 The output can be interpreted as the refined representation of the target node
 after incorporating information from its neighbors.

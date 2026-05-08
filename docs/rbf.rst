@@ -30,7 +30,9 @@ Bandwidth Estimation
 
 If ``bandwidth`` is provided, the module uses it as a fixed bandwidth. If
 ``bandwidth`` is ``None``, the bandwidth is estimated from the current batch by
-averaging the pairwise squared distances between different samples.
+dividing the sum of the pairwise squared distance matrix by
+``n_samples ** 2 - n_samples``. The diagonal distances are zero, so this is
+equivalent to averaging over the off-diagonal sample pairs.
 
 This means the kernel adapts to the scale of the embeddings in each batch. It is
 convenient when embedding magnitudes vary across datasets or training stages,
@@ -69,6 +71,6 @@ Output:
 Typical Usage
 -------------
 
-``RBF`` is usually not called directly in the training pipeline. It is passed to
-``MMD_loss``, which stacks two embedding sets, computes the shared kernel
-matrix, and compares within-domain and cross-domain similarities.
+``RBF`` is used by ``MMD_loss`` in ``model.py``. ``MMD_loss`` stacks two
+embedding sets, computes one shared kernel matrix with ``RBF``, and compares
+within-domain and cross-domain similarities.
