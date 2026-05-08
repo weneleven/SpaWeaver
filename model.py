@@ -31,13 +31,6 @@ class RBF(nn.Module):
         Fixed base bandwidth, or ``None`` when batch-wise bandwidth estimation
         is used.
 
-    Methods
-    -------
-    get_bandwidth(L2_distances)
-        Return the fixed or batch-estimated base bandwidth.
-    forward(X)
-        Compute the summed multi-scale RBF kernel matrix.
-
     Notes
     -----
     ``forward`` expects ``X`` to be a ``torch.Tensor`` with shape
@@ -71,12 +64,6 @@ class RBF(nn.Module):
             bandwidth from the pairwise squared distance matrix passed during
             ``forward``.
 
-        Attributes
-        ----------
-        bandwidth_multipliers : torch.Tensor
-            One-dimensional tensor with ``n_kernels`` scale multipliers.
-        bandwidth : float or None
-            Stored fixed bandwidth or ``None`` for batch-wise estimation.
         """
         super().__init__()
         self.bandwidth_multipliers = mul_factor ** (torch.arange(n_kernels) - n_kernels // 2)
@@ -238,12 +225,6 @@ class transformerModel(nn.Module):
         Learnable scalar initialized to ``0.5``. It is defined by the module but
         is not used in ``forward``.
 
-    Methods
-    -------
-    forward(batched_data)
-        Encode a target-neighbor sequence and return an aggregated target
-        representation.
-
     Notes
     -----
     ``forward`` expects ``batched_data`` to be a ``torch.Tensor`` whose last
@@ -299,17 +280,6 @@ class transformerModel(nn.Module):
         attention_dropout_rate : float, default=0.1
             Dropout probability passed to multi-head attention.
 
-        Attributes
-        ----------
-        seq_len : int
-            ``hops + 1``.
-        layers : torch.nn.ModuleList
-            Encoder stack containing ``n_layers`` modules.
-        final_ln : torch.nn.LayerNorm
-            Final sequence-level layer normalization.
-        attn_layer : torch.nn.Linear
-            Linear layer that maps concatenated target-neighbor features to one
-            scalar attention logit per neighbor.
         """
         super().__init__()
 
