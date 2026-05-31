@@ -9,13 +9,6 @@ image-embedding handling, and transformer-based modeling.
    :caption: Contents
 
    installation
-   quickstart
    tutorial
    api
 
-Indices and Tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
