@@ -4,12 +4,12 @@ API
 SpaWeaver model API.
 
 This page documents the two core classes currently exposed from
-``model.py``. The class names below match the real source code.
+``SpaWeaver/model.py``. The class names below match the real source code.
 
 RBF
 ---
 
-.. autoclass:: model.RBF
+.. autoclass:: SpaWeaver.model.RBF
    :members: get_bandwidth, forward
    :special-members: __init__
    :show-inheritance:
@@ -17,7 +17,7 @@ RBF
 transformerModel
 ----------------
 
-.. autoclass:: model.transformerModel
+.. autoclass:: SpaWeaver.model.transformerModel
    :members: forward
    :special-members: __init__
    :show-inheritance:

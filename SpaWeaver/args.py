@@ -41,6 +41,7 @@ def build_args():
     parser.add_argument("--scale", type=float, default=0.363788)
     parser.add_argument("--cell_diameter", type=float, default=-1, help="By physical size (um)")
     parser.add_argument("--resolution", type=float, default=64, help="By pixels")
+    parser.add_argument("--mmd_weight", type=float, default=0.01, help="weight for MMD")
 
     # read parameters
     args = parser.parse_args()

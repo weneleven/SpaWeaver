@@ -315,7 +315,7 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx, device='cpu'):
     indices = torch.from_numpy(np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
     values = torch.from_numpy(sparse_mx.data)
     shape = torch.Size(sparse_mx.shape)
-    return torch.sparse.FloatTensor(indices, values, shape).to(device)
+    return torch.sparse_coo_tensor(indices, values, shape, device=device)
 
 
 def re_features(adj, features, K, device='cpu'):

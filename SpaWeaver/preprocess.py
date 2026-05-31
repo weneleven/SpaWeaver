@@ -13,30 +13,21 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 Image.MAX_IMAGE_PIXELS = None
 
 
-def read_Xenium(h5_path, obs_path):
-    adata = sc.read_10x_h5(h5_path)
-    adata.obs = pd.read_csv(obs_path, index_col=0)
+def read_h5ad(h5_path):
+    adata = sc.read_h5ad(h5_path)
+    adata.var_names_make_unique()
+    adata.obs_names_make_unique()
+    return adata
+
+    
+def read_Xenium(root_path):
+    adata = sc.read_10x_h5(root_path + 'cell_feature_matrix.h5')
+    adata.obs = pd.read_csv(root_path + 'cells.csv', index_col=0)
     adata.var_names = adata.var_names.astype(str)
     adata.obs_names = adata.obs_names.astype(str)
     adata.var_names_make_unique()
     adata.obs_names_make_unique()
     adata.obsm['spatial'] = adata.obs[['x_centroid', 'y_centroid']].values
-    return adata
-
-
-def preprocess_protein(adata):
-    def protein_norm(x):
-        s = np.sum(np.log1p(x[x > 0]))
-        exp = np.exp(s / len(x))
-        return np.log1p(x / exp)
-    adata.X = np.apply_along_axis(protein_norm, 1, np.array(adata.X))
-    return adata
-
-
-def read_h5ad(h5_path):
-    adata = sc.read_h5ad(h5_path)
-    adata.var_names_make_unique()
-    adata.obs_names_make_unique()
     return adata
 
 
@@ -60,6 +51,142 @@ def read_VisiumHD(root_path):
     return adata
 
 
+def mt_qc(adata, prefix='MT-', pct=20):
+    sc.pp.filter_genes(adata, min_cells=1)
+
+    adata.var[prefix] = adata.var_names.str.startswith(prefix)
+    sc.pp.calculate_qc_metrics(adata, qc_vars=[prefix], percent_top=None, log1p=False, inplace=True)
+    adata = adata[adata.obs[f'pct_counts_{prefix}'] < pct, :]
+    adata = adata[:, ~adata.var[prefix]].copy()
+    return adata
+
+    
+def read_HE_image(img_path, suffix='.ome.tif'):
+    import tifffile as tiff
+
+    scale = -1
+    if suffix == '.ome.tif':
+        import xml.etree.ElementTree as ET
+
+        ome_tif = tiff.TiffFile(img_path)
+        image_data = ome_tif.asarray()
+        metadata = ome_tif.ome_metadata
+        ome_tif.close()
+
+        root = ET.fromstring(metadata)
+        namespace = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
+
+        pixels_element = root.find('.//ome:Pixels', namespace)
+        if pixels_element is not None:
+            pixels_attributes = pixels_element.attrib
+            for attr, value in pixels_attributes.items():
+                if attr == 'PhysicalSizeX' or attr == 'PhysicalSizeX':
+                    scale = float(value)
+                    break
+    elif suffix == '.png' or suffix == '.jpg':
+        image = Image.open(img_path)
+        image_data = np.array(image)
+    elif suffix == '.tif':
+        ome_tif = tiff.TiffFile(img_path)
+        image_data = ome_tif.asarray()
+        ome_tif.close()
+    else:
+        print("Only support '.ome.tif', '.png' or '.jpg' file currently.")
+    return image_data, scale
+
+
+def register_physical_to_pixel(adata, transform_matrix, scale=1,
+                               raw_key=['x_centroid', 'y_centroid'],
+                               matrix_type='pixel2phsical',  # 'pixel2phsical'或者'physical2pixel'
+                               prefix='image'):
+    scale_old = np.sqrt(transform_matrix[0, 0] ** 2 + transform_matrix[0, 1] ** 2)
+    scale = scale / scale_old
+    transform_matrix = transform_matrix * scale
+    transform_matrix[-1, -1] = 1
+
+    if matrix_type == 'pixel2phsical':
+        transform_matrix = np.linalg.inv(transform_matrix)
+
+    x = adata.obs[raw_key[0]].values
+    y = adata.obs[raw_key[1]].values
+    ones = np.ones_like(x)
+    coor_raw = np.vstack([x, y, ones])
+
+    coor_new = (transform_matrix @ coor_raw)[:2, :]
+    image_coor = np.round(coor_new).astype(int)
+    adata.obsm[prefix + '_coor'] = image_coor.T
+    adata.obs[prefix + '_col'] = image_coor[0]
+    adata.obs[prefix + '_row'] = image_coor[1]
+    return adata
+
+
+def tiling_HE_patches(args, adata, img, key='image_coor', get_filter=False):  # iStar中说，单细胞大小约为8um*8um
+    print('======================== Tiling HE patches for each single cells ===========================')
+    if args.cell_diameter > 0:
+        patch_radius = np.round(args.cell_diameter / args.scale / 2).astype(int)  # 映射到pixel
+    else:
+        patch_radius = int(args.resolution / 2.0)
+        print("patch radius is ", patch_radius)
+    outlier_cells1 = np.where(adata.obsm[key] < patch_radius)[0]
+    outlier_cells2 = np.where(adata.obsm[key][:, 0] > (img.shape[1] - patch_radius))[0]
+    outlier_cells3 = np.where(adata.obsm[key][:, 1] > (img.shape[0] - patch_radius))[0]
+    outlier_cells = np.unique(np.hstack([outlier_cells1, outlier_cells2, outlier_cells3]))
+    if len(outlier_cells) != 0:
+        print('Remove the outlier cells, and Anndata file was reduced!')
+        inlier_cells = set(np.arange(adata.n_obs)) - set(outlier_cells)
+        adata = adata[list(inlier_cells)]
+    he_patches = [0] * adata.n_obs
+    adata.obsm[key] = adata.obsm[key].astype(int)
+    for i in tqdm(range(adata.n_obs)):
+        x, y = adata.obsm[key][i]
+        he_patches[i] = torch.tensor(img[y - patch_radius: y + patch_radius, x - patch_radius:x + patch_radius])
+
+    return torch.stack(he_patches, dim=0) / 255.0, adata
+
+
+def extract_HE_patches_representation(args, he_patches, store_key=None, adata=None, skip_embedding=False):
+    import torchvision.transforms as transforms
+    from .utils import create_ImageEncoder
+
+    if he_patches.dim() == 3:
+        he_patches = he_patches.unsqueeze(0)  # 如果不是batch，则补充batch维度
+    if he_patches.size(1) != 3:
+        he_patches = he_patches.permute(0, 3, 1, 2)  # 通道维度放前面, (batch, channel, x, y)
+    # he_patches = he_patches.float()
+
+    print('====================== Extracting HE representations for each cell =========================')
+    preprocess = transforms.Compose([transforms.Resize(224),
+                                     # transforms.ToTensor(),
+                                     # transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),])
+                                     transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225), )])
+
+    representaions = []
+    batch_num = int(np.ceil(he_patches.size(0) / args.img_batch_size))
+    # batch_num = 12
+    if not skip_embedding:
+        model = create_ImageEncoder(args.image_encoder)
+        model.to(args.device)
+        model.eval()
+        for i in tqdm(range(batch_num)):
+            img_tensor = preprocess(
+                he_patches[i * args.img_batch_size:min((i + 1) * args.img_batch_size, he_patches.size(0))].to(
+                    args.device))
+            with torch.no_grad():
+                features = model(img_tensor).squeeze().detach().cpu().numpy()
+                representaions.append(features)
+            torch.cuda.empty_cache()
+    else:
+        for i in tqdm(range(batch_num)):
+            img_tensor = preprocess(
+                he_patches[i * args.img_batch_size:min((i + 1) * args.img_batch_size, he_patches.size(0))])
+            representaions.append(img_tensor)
+
+    representaions = np.vstack(representaions)
+    if isinstance(store_key, str):
+        adata.obsm[store_key] = representaions
+    return representaions
+    
+    
 def load_he_emb(adata, meta_root, tag):
     cell_filter = np.load(f'{meta_root}cell_filter/{tag}.npy', allow_pickle=True)
     adata = adata[cell_filter]
@@ -67,7 +194,7 @@ def load_he_emb(adata, meta_root, tag):
     return adata
 
 
-def preprocess_adata(adata, selected_genes=None, target_sum=None, scale=False, n_hvg=-1):
+def preprocess_rna(adata, selected_genes=None, target_sum=None, scale=False, n_hvg=-1):
     adata.layers['raw'] = adata.X.copy()
     if n_hvg > 0:
         sc.pp.highly_variable_genes(adata, n_top_genes=n_hvg, flavor="seurat_v3")
@@ -94,30 +221,16 @@ def preprocess_adata(adata, selected_genes=None, target_sum=None, scale=False, n
         adata.X = adata.X.todense().A
     return adata
 
-
-def quality_control(adata, platform='VisiumHD', filter_var=True, filter_obs=True, qt_threshold=[0.05, 0.95], return_filters=False):
-    adata.var['mt'] = adata.var_names.str.upper().str.startswith('MT-') 
-    adata.var['ribo'] = adata.var_names.str.upper().str.startswith(("RPS","RPL"))
-    var_filter = (adata.var['mt'] == False) & (adata.var['ribo'] == False)
-    sc.pp.calculate_qc_metrics(adata, qc_vars=['mt'], percent_top=None, log1p=False, inplace=True)
-    adata.obs['log10GenesPerUMI'] = np.log10(adata.obs['n_genes_by_counts']) / np.log10(adata.obs['total_counts'])
-    if filter_var:
-        adata = adata[:, var_filter]
     
-    if platform == 'VisiumHD':
-        obs_filter = (adata.obs['log10GenesPerUMI'] > 0.9) & (adata.obs['log10GenesPerUMI'] < 0.99)
-        min_counts = int(np.quantile(adata.obs['total_counts'], qt_threshold[0]))
-        max_counts = int(np.quantile(adata.obs['total_counts'], qt_threshold[1]))
-        obs_filter = obs_filter & (adata.obs['total_counts'] > min_counts) & (adata.obs['total_counts'] < max_counts) & (adata.obs['pct_counts_mt'] < 30)
-    else:
-        obs_filter = (adata.obs['n_genes_by_counts'] > 50) & (adata.obs['pct_counts_mt'] < 38)
-    if filter_obs:
-        adata = adata[obs_filter]
-    if return_filters:
-        return adata, var_filter, obs_filter
+def preprocess_protein(adata):
+    def protein_norm(x):
+        s = np.sum(np.log1p(x[x > 0]))
+        exp = np.exp(s / len(x))
+        return np.log1p(x / exp)
+    adata.X = np.apply_along_axis(protein_norm, 1, np.array(adata.X))
     return adata
-    
 
+    
 def build_graph(x, weighted=False, symmetric=False, graph_type='radius', metric='euclidean', self_loop=True,
                 radius=50, num_neighbors=50, apply_normalize='none', sigma=0.01, return_type='csr', device=None):
     '''

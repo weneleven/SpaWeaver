@@ -14,3 +14,10 @@ outputs/
 inputs/
 data/
 datasets/
+
+# Python build artifacts
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc

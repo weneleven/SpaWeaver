@@ -4,10 +4,11 @@ import types
 
 
 repo_root = Path(__file__).resolve().parents[1]
+package_root = repo_root / "SpaWeaver"
 sys.path.insert(0, str(repo_root))
 
 spaweaver_package = types.ModuleType("SpaWeaver")
-spaweaver_package.__path__ = [str(repo_root)]
+spaweaver_package.__path__ = [str(package_root)]
 sys.modules.setdefault("SpaWeaver", spaweaver_package)
 
 
