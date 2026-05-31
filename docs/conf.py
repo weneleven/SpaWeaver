@@ -4,12 +4,7 @@ import types
 
 
 repo_root = Path(__file__).resolve().parents[1]
-package_root = repo_root / "SpaWeaver"
 sys.path.insert(0, str(repo_root))
-
-spaweaver_package = types.ModuleType("SpaWeaver")
-spaweaver_package.__path__ = [str(package_root)]
-sys.modules.setdefault("SpaWeaver", spaweaver_package)
 
 
 class _TorchTensorMock:
@@ -106,6 +101,22 @@ torch_mock.matmul = _torch_factory
 torch_mock.split = lambda *args, **kwargs: (_TorchTensorMock(), _TorchTensorMock())
 torch_mock.softmax = _torch_factory
 
+optim_mock = types.ModuleType("torch.optim")
+dist_mock = types.ModuleType("torch.distributed")
+multiprocessing_mock = types.ModuleType("torch.multiprocessing")
+utils_mock = types.ModuleType("torch.utils")
+data_mock = types.ModuleType("torch.utils.data")
+data_mock.DataLoader = _Layer
+data_mock.TensorDataset = _Layer
+data_mock.DistributedSampler = _Layer
+cuda_mock = types.SimpleNamespace(
+    manual_seed=_torch_factory,
+    manual_seed_all=_torch_factory,
+)
+backends_mock = types.SimpleNamespace(
+    cudnn=types.SimpleNamespace(deterministic=False, benchmark=False)
+)
+
 nn_mock = types.ModuleType("torch.nn")
 nn_mock.Module = _Module
 nn_mock.ModuleList = _ModuleList
@@ -122,9 +133,20 @@ functional_mock = types.ModuleType("torch.nn.functional")
 functional_mock.softmax = _torch_factory
 
 torch_mock.nn = nn_mock
+torch_mock.optim = optim_mock
+torch_mock.distributed = dist_mock
+torch_mock.multiprocessing = multiprocessing_mock
+torch_mock.utils = utils_mock
+torch_mock.cuda = cuda_mock
+torch_mock.backends = backends_mock
 sys.modules.setdefault("torch", torch_mock)
 sys.modules.setdefault("torch.nn", nn_mock)
 sys.modules.setdefault("torch.nn.functional", functional_mock)
+sys.modules.setdefault("torch.optim", optim_mock)
+sys.modules.setdefault("torch.distributed", dist_mock)
+sys.modules.setdefault("torch.multiprocessing", multiprocessing_mock)
+sys.modules.setdefault("torch.utils", utils_mock)
+sys.modules.setdefault("torch.utils.data", data_mock)
 
 project = "SpaWeaver"
 author = "SpaWeaver contributors"
@@ -136,11 +158,13 @@ extensions = [
     "sphinx.ext.autosummary",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
+    "nbsphinx",
 ]
 
 autosummary_generate = True
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
+nbsphinx_execute = "never"
 
 autodoc_mock_imports = [
     "anndata",
@@ -149,6 +173,7 @@ autodoc_mock_imports = [
     "numpy",
     "pandas",
     "PIL",
+    "timm",
     "scanpy",
     "scipy",
     "skimage",

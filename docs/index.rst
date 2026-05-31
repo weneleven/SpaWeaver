@@ -10,6 +10,7 @@ image-embedding handling, and transformer-based modeling.
 
    installation
    quickstart
+   tutorial
    api
 
 Indices and Tables
