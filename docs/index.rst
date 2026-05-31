@@ -1,8 +1,7 @@
 SpaWeaver Documentation
 =======================
 
-SpaWeaver provides utilities for spatial omics preprocessing, graph construction,
-image-embedding handling, and transformer-based modeling.
+SpaWeaver is a powerful tool for robust integration of weakly anchored spatial omics data.
 
 .. toctree::
    :maxdepth: 2

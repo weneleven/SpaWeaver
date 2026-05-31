@@ -3,7 +3,6 @@ Tutorial
 
 .. toctree::
    :maxdepth: 1
-   :caption: Tutorials:
 
    tutorial/Tutorial 1 Comprehensive benchmarking of panel diagonal integration under H&E style variation
    tutorial/Tutorial 2 Cross-resolution panel integration in weakly anchored spatial omics data
