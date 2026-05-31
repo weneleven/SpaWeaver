@@ -161,7 +161,9 @@ extensions = [
 autosummary_generate = True
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
+autoclass_content = "both"
 nbsphinx_execute = "never"
+
 
 autodoc_mock_imports = [
     "anndata",
