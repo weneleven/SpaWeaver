@@ -74,6 +74,35 @@ def structural_similarity_on_graph_data(x, y, adj, K1=0.01, K2=0.03, alpha=1, be
 
 
 def compute_metrics(x, x_prime, metric='cosine_similarity', reduce='median', graph=None):
+    """Compute feature-wise agreement between observed and reconstructed data.
+
+    Parameters
+    ----------
+    x : numpy.ndarray
+        Observed data matrix of shape ``(n_observations, n_features)``.
+    x_prime : numpy.ndarray
+        Reconstructed data matrix with the same shape as ``x``.
+    metric : str, optional
+        One of ``"cosine_similarity"``, ``"rmse"``, ``"pcc"``, ``"ssim"``,
+        or ``"cmd"``. The ``"ssim"`` metric requires ``graph``.
+    reduce : {"mean", "sum", "median"}, optional
+        Method used to aggregate the feature-wise values.
+    graph : scipy.sparse.spmatrix, optional
+        Spatial adjacency matrix required when ``metric="ssim"``.
+
+    Returns
+    -------
+    metric_values : numpy.ndarray
+        One metric value per feature. For large ``"cmd"`` inputs, values are
+        returned for feature batches.
+    metric_reduce : float
+        Aggregated value computed with ``reduce``.
+
+    Notes
+    -----
+    ``"cmd"`` measures the distance between feature correlation matrices.
+    Large ``"ssim"`` and ``"cmd"`` inputs are evaluated in batches.
+    """
     metric = metric.lower()
     if metric == 'cosine_similarity':
         dot_product = np.sum(x_prime * x, axis=0)
@@ -153,6 +182,27 @@ def compute_metrics(x, x_prime, metric='cosine_similarity', reduce='median', gra
 
 
 def compute_MoransI(adata, adj, store_key=None):
+    """Calculate feature-wise Moran's I spatial autocorrelation.
+
+    Parameters
+    ----------
+    adata : anndata.AnnData
+        AnnData object with observations in rows and features in columns.
+    adj : scipy.sparse.spmatrix
+        Spatial adjacency matrix with shape ``(adata.n_obs, adata.n_obs)``.
+    store_key : str, optional
+        Column name used to store values in ``adata.var``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Moran's I value for every feature in ``adata.X``.
+
+    Notes
+    -----
+    When ``store_key`` is provided, the returned values are also written to
+    ``adata.var[store_key]``.
+    """
     n = adata.n_obs
     x_bar = np.mean(adata.X, axis=0)
     x = adata.X - x_bar
@@ -259,6 +309,32 @@ def cleanup() -> None:
 
 
 def create_ImageEncoder(model_name='resnet50', pretrained=True, frozen=True):
+    """Create an image encoder for H&E patch representation extraction.
+
+    Parameters
+    ----------
+    model_name : str, optional
+        One of ``"resnet50"``, ``"resnet101"``, ``"resnet152"``,
+        ``"vit_b_16"``, ``"vit_b_32"``, ``"vit_l_16"``, ``"vit_l_32"``,
+        ``"vit_h_14"``, or ``"uni"``. The UNI model loads
+        ``./UNI_weights/pytorch_model.bin``.
+    pretrained : bool, optional
+        Retained for API compatibility. Torchvision backbones currently load
+        pretrained weights regardless of this value.
+    frozen : bool, optional
+        If true, put the returned encoder in evaluation mode.
+
+    Returns
+    -------
+    torch.nn.Module
+        Configured image encoder. ResNet classifiers are removed so the model
+        produces feature representations.
+
+    Raises
+    ------
+    AssertionError
+        If ``model_name`` is not supported.
+    """
     model_name = model_name.lower()
     if model_name == 'resnet50':
         model = models.resnet50(pretrained=True)

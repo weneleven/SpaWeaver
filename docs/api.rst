@@ -1,10 +1,10 @@
 API
 ===
 
-SpaWeaver model API.
+SpaWeaver API.
 
-This page documents the two core classes exposed from ``SpaWeaver.model``:
-``RBF`` and ``transformerModel``.
+This page documents the core model classes and commonly used utility
+functions.
 
 RBF
 ---
@@ -19,3 +19,14 @@ transformerModel
 .. autoclass:: SpaWeaver.model.transformerModel
    :members: forward
    :show-inheritance:
+
+Utility functions
+-----------------
+
+The following functions are available through ``SpaWeaver.utils``.
+
+.. autofunction:: SpaWeaver.utils.compute_metrics
+
+.. autofunction:: SpaWeaver.utils.compute_MoransI
+
+.. autofunction:: SpaWeaver.utils.create_ImageEncoder
