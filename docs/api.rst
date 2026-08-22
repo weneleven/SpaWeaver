@@ -30,3 +30,14 @@ The following functions are available through ``SpaWeaver.utils``.
 .. autofunction:: SpaWeaver.utils.compute_MoransI
 
 .. autofunction:: SpaWeaver.utils.create_ImageEncoder
+
+Preprocessing functions
+-----------------------
+
+The following functions are available through ``SpaWeaver.pp``.
+
+.. autofunction:: SpaWeaver.preprocess.read_VisiumHD
+
+.. autofunction:: SpaWeaver.preprocess.load_he_emb
+
+.. autofunction:: SpaWeaver.preprocess.mt_qc

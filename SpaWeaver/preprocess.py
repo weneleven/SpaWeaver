@@ -32,6 +32,28 @@ def read_Xenium(root_path):
 
 
 def read_VisiumHD(root_path):
+    """Read a 10x Genomics Visium HD dataset and its spatial metadata.
+
+    Parameters
+    ----------
+    root_path : str
+        Dataset directory containing ``filtered_feature_bc_matrix.h5`` and a
+        ``spatial`` subdirectory with ``tissue_positions.parquet`` and
+        ``scalefactors_json.json``.
+
+    Returns
+    -------
+    anndata.AnnData
+        Expression data with unique observation and feature names. Pixel
+        coordinates are stored in ``.obsm['image_coor']``, physical spatial
+        coordinates in ``.obsm['spatial']``, and array coordinates in
+        ``.obs['array_row']`` and ``.obs['array_col']``.
+
+    Notes
+    -----
+    Physical coordinates are computed by multiplying full-resolution pixel
+    coordinates by ``microns_per_pixel`` from ``scalefactors_json.json``.
+    """
     adata = sc.read_10x_h5(root_path + 'filtered_feature_bc_matrix.h5')
     adata.var_names_make_unique()
     adata.obs_names_make_unique()
@@ -52,6 +74,28 @@ def read_VisiumHD(root_path):
 
 
 def mt_qc(adata, prefix='MT-', pct=20):
+    """Filter low-quality cells and mitochondrial genes from expression data.
+
+    Parameters
+    ----------
+    adata : anndata.AnnData
+        Input AnnData object containing gene expression in ``.X``.
+    prefix : str, optional
+        Prefix used to identify mitochondrial genes in ``adata.var_names``.
+    pct : float, optional
+        Maximum permitted percentage of counts assigned to mitochondrial
+        genes. Cells at or above this threshold are removed.
+
+    Returns
+    -------
+    anndata.AnnData
+        Filtered AnnData object with mitochondrial genes removed.
+
+    Notes
+    -----
+    The function first removes genes expressed in fewer than one cell and
+    writes Scanpy quality-control metrics to ``adata.obs`` before filtering.
+    """
     sc.pp.filter_genes(adata, min_cells=1)
 
     adata.var[prefix] = adata.var_names.str.startswith(prefix)
@@ -188,6 +232,26 @@ def extract_HE_patches_representation(args, he_patches, store_key=None, adata=No
     
     
 def load_he_emb(adata, meta_root, tag):
+    """Load precomputed H&E embeddings and apply their cell filter.
+
+    Parameters
+    ----------
+    adata : anndata.AnnData
+        AnnData object whose observations are aligned with the stored cell
+        filter.
+    meta_root : str
+        Directory prefix containing ``cell_filter`` and ``he_emb`` folders.
+        Include a trailing path separator when necessary.
+    tag : str
+        Dataset identifier used to locate ``cell_filter/{tag}.npy`` and
+        ``he_emb/{tag}.npy`` below ``meta_root``.
+
+    Returns
+    -------
+    anndata.AnnData
+        Cell-filtered AnnData object with the loaded H&E embedding stored in
+        ``.obsm['he']``.
+    """
     cell_filter = np.load(f'{meta_root}cell_filter/{tag}.npy', allow_pickle=True)
     adata = adata[cell_filter]
     adata.obsm['he'] = np.load(f'{meta_root}he_emb/{tag}.npy')
