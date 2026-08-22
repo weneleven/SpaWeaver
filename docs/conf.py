@@ -180,6 +180,7 @@ autodoc_mock_imports = [
     "scipy",
     "skimage",
     "sklearn",
+    "tqdm",
     "torchvision",
 ]
 
