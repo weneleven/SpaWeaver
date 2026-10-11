@@ -395,6 +395,39 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx, device='cpu'):
 
 
 def re_features(adj, features, K, device='cpu'):
+    """Collect node features across successive graph propagation steps.
+
+    Parameters
+    ----------
+    adj : scipy.sparse.spmatrix or torch.Tensor
+        Adjacency or propagation matrix of shape ``(n_nodes, n_nodes)``.
+        SciPy sparse matrices are converted to float32 PyTorch sparse COO
+        tensors on ``device``. PyTorch tensors may be dense or sparse COO.
+    features : numpy.ndarray or torch.Tensor
+        Node features of shape ``(n_nodes, n_features)``, aligned with the
+        rows and columns of ``adj``. Non-tensor inputs are converted with
+        ``torch.Tensor`` and moved to ``device``.
+    K : int
+        Non-negative number of propagation steps. ``K=0`` returns only the
+        original node features, with a singleton propagation dimension.
+    device : str or torch.device, optional
+        Device for converted inputs and the output buffer. Defaults to
+        ``'cpu'``. Existing tensor inputs are not moved automatically and
+        must already be on this device with compatible floating-point dtypes.
+
+    Returns
+    -------
+    numpy.ndarray
+        Features of shape ``(n_nodes, K + 1, n_features)`` on the CPU.
+        Slice ``[:, 0, :]`` contains the original features; slice
+        ``[:, k, :]`` contains ``adj`` applied ``k`` times to those features.
+
+    Notes
+    -----
+    The propagation matrix is used as supplied, without normalization or
+    added self-loops. The result is detached from the PyTorch computation
+    graph before conversion to NumPy.
+    """
     if not torch.is_tensor(features):
         features = torch.Tensor(features).to(device)
 
@@ -425,6 +458,30 @@ def re_features_np(adj, features, K):
 
 
 def simonson_vHE(dapi_image, eosin_image):
+    """Generate a virtual H&E RGB image from DAPI and eosin intensity images.
+
+    Parameters
+    ----------
+    dapi_image : numpy.ndarray of shape (height, width)
+        Two-dimensional DAPI intensity image with non-negative values.
+    eosin_image : numpy.ndarray of shape (height, width)
+        Two-dimensional eosin intensity image with non-negative values,
+        spatially aligned with ``dapi_image`` and having the same shape.
+
+    Returns
+    -------
+    numpy.ndarray
+        Virtual H&E image of shape ``(height, width, 3)`` in RGB order,
+        with dtype ``uint8`` and pixel values on the 0--255 scale.
+
+    Notes
+    -----
+    Each color channel combines the two inputs through an exponential
+    intensity mapping. The implementation uses fixed stain coefficients,
+    ``k1 = k2 = 0.001``, and background values ``(0.25, 0.25, 0.25)``.
+    Inputs are used at their supplied intensity scale without normalization;
+    their scale therefore affects the resulting colors.
+    """
     
     def createVirtualHE(dapi_image, eosin_image, k1, k2, background, beta_DAPI, beta_eosin):
         new_image = np.empty([dapi_image.shape[0], dapi_image.shape[1], 3])
@@ -445,7 +502,41 @@ def simonson_vHE(dapi_image, eosin_image):
     
 
 def group_technical_effects(X, cluster_sign, batch_sign):
-    '''Ref: https://doi.org/10.1038/s43588-025-00824-7'''
+    """Calculate feature-wise between-batch variance within cell groups.
+
+    Parameters
+    ----------
+    X : numpy.ndarray of shape (n_observations, n_features)
+        Dense expression or embedding matrix to evaluate.
+    cluster_sign : numpy.ndarray of shape (n_observations,)
+        Cell-type or cluster labels, aligned with the rows of ``X``.
+    batch_sign : numpy.ndarray of shape (n_observations,)
+        Batch labels, aligned with the rows of ``X``. Every cluster must
+        contain observations from every batch for a finite result.
+
+    Returns
+    -------
+    numpy.ndarray
+        Technical-effect scores of shape ``(n_features,)``. For each
+        cluster, subtract the weighted within-batch population variances
+        from the cluster's population variance, using each batch's fraction
+        of the cluster's observations as its weight. Sum these contributions
+        across clusters without averaging over clusters.
+
+    Raises
+    ------
+    AssertionError
+        If the number of rows in ``X`` does not match both label arrays.
+
+    Notes
+    -----
+    Variances use ``ddof=0``. Empty cluster-batch combinations are not
+    skipped and can produce NumPy warnings and ``NaN`` scores.
+
+    References
+    ----------
+    https://doi.org/10.1038/s43588-025-00824-7
+    """
 
     assert X.shape[0] == np.array(cluster_sign).shape[0] == np.array(batch_sign).shape[0]
 
@@ -467,12 +558,41 @@ def group_technical_effects(X, cluster_sign, batch_sign):
 
 
 def HED_simulated_artifact(img, alpha_var=0.2, beta_var=0.2):
-    """
-    Simulates stain-related artifacts in H&E images following the method described in:
+    """Simulate stain-related artifacts by perturbing H&E stain intensities.
 
+    Parameters
+    ----------
+    img : numpy.ndarray of shape (height, width, 3)
+        RGB H&E image with pixel values on the 0--255 scale.
+    alpha_var : float, optional
+        Non-negative half-width of the uniform range for multiplicative
+        perturbations. Independent H and E factors are sampled from
+        ``[1 - alpha_var, 1 + alpha_var]``. Defaults to ``0.2``.
+    beta_var : float, optional
+        Non-negative half-width of the uniform range for additive
+        perturbations. Independent H and E offsets are sampled from
+        ``[-beta_var, beta_var]``. Defaults to ``0.2``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Perturbed RGB image with the same shape as ``img``, clipped to
+        [0, 255] and returned with dtype ``uint8``.
+
+    Notes
+    -----
+    The image is converted to optical density and transformed using fixed
+    H and E stain vectors and their cross-product background vector.
+    One set of random H and E factors and offsets is sampled per call and
+    applied to all pixels. The background component is not perturbed.
+    Sampling uses NumPy's global random state; set its seed before calling
+    this function for reproducible perturbations.
+
+    References
+    ----------
     Tellez D., Balkenhol M., Otte-Höller I., et al.
-    "Whole-slide mitosis detection in H&E breast histology using PHH3 as a reference
-    to train distilled stain-invariant convolutional networks."
+    "Whole-slide mitosis detection in H&E breast histology using PHH3 as a
+    reference to train distilled stain-invariant convolutional networks."
     IEEE Transactions on Medical Imaging, 2018, 37(9): 2126-2136.
     """
     
@@ -604,8 +724,57 @@ def remove_sinusoidal_component_single(emb, axis, freqs):
 
 
 def remove_sinusoidal_component(emb, axis, artifact_dims=None, min_peak_freq=0, max_peak_freq=999, verbose=False, **kwargs):
-    """
-    去除嵌入向量中的周期性伪影成分
+    """Remove detected sinusoidal components along a spatial coordinate axis.
+
+    Parameters
+    ----------
+    emb : numpy.ndarray of shape (n_observations, n_features)
+        Floating-point embedding matrix to correct.
+    axis : numpy.ndarray of shape (n_observations,)
+        One-dimensional spatial coordinates aligned with the rows of
+        ``emb``. Frequencies are measured in cycles per coordinate unit.
+    artifact_dims : sequence of int or None, optional
+        Feature indices to correct. Leave this as ``None`` (the default)
+        to detect features and their frequencies automatically. Non-empty
+        explicit selections are currently unsupported; see Raises.
+    min_peak_freq : float, optional
+        Exclusive lower frequency bound for removal. Defaults to ``0``.
+        Only strictly positive frequencies are considered.
+    max_peak_freq : float, optional
+        Exclusive upper frequency bound for removal. Defaults to ``999``.
+    verbose : bool, optional
+        Whether to print detection information and display a progress bar.
+        Defaults to ``False``.
+    **kwargs
+        Options forwarded to ``detect_periodic_components`` during automatic
+        detection: ``threshold`` (default ``0.08``), the minimum ratio of
+        the strongest nonzero-frequency spectral power to total nonzero
+        spectral power; ``bin_width`` (default ``1``), the spatial bin width;
+        and ``max_freqs`` (default ``3``), the maximum number of candidate
+        frequencies retained per feature.
+
+    Returns
+    -------
+    numpy.ndarray
+        Corrected copy of ``emb`` with the same shape and dtype. Features
+        that are not selected, or have no retained frequencies, remain
+        unchanged. The input is not modified.
+
+    Raises
+    ------
+    UnboundLocalError
+        If ``artifact_dims`` is explicitly supplied and non-empty: the
+        current implementation only defines ``peak_freqs`` during automatic
+        detection when ``artifact_dims=None``.
+
+    Notes
+    -----
+    Automatic detection bins observations along ``axis``, interpolates
+    missing bin values when possible, and analyzes periodograms of the
+    binned features. For each selected feature, sine and cosine terms at
+    the retained frequencies are fitted to the original observations by
+    linear regression without an intercept. Their fitted contribution is
+    subtracted from that feature.
     """
     if artifact_dims is None:
         artifact_dims, peak_freqs = detect_periodic_components(emb, axis, verbose=verbose, **kwargs)

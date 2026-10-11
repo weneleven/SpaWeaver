@@ -31,6 +31,16 @@ The following functions are available through ``SpaWeaver.utils``.
 
 .. autofunction:: SpaWeaver.utils.create_ImageEncoder
 
+.. autofunction:: SpaWeaver.utils.simonson_vHE
+
+.. autofunction:: SpaWeaver.utils.HED_simulated_artifact
+
+.. autofunction:: SpaWeaver.utils.re_features
+
+.. autofunction:: SpaWeaver.utils.group_technical_effects
+
+.. autofunction:: SpaWeaver.utils.remove_sinusoidal_component
+
 Preprocessing functions
 -----------------------
 
