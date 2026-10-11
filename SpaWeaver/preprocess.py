@@ -106,6 +106,31 @@ def mt_qc(adata, prefix='MT-', pct=20):
 
     
 def read_HE_image(img_path, suffix='.ome.tif'):
+    """Read an H&E image and its physical pixel size when available.
+
+    Parameters
+    ----------
+    img_path : str or pathlib.Path
+        Path to the H&E image file.
+    suffix : {'.ome.tif', '.png', '.jpg', '.tif'}, optional
+        Image format used to select the reader. This value is not inferred
+        from ``img_path``. Defaults to ``'.ome.tif'``.
+
+    Returns
+    -------
+    image_data : numpy.ndarray
+        Image array with the shape and channel order returned by the reader.
+    scale : float or int
+        Value of ``PhysicalSizeX`` from OME metadata, or ``-1`` for other
+        formats or when that attribute is absent. Units are those of the
+        metadata; no unit conversion is performed.
+
+    Notes
+    -----
+    OME-TIFF images must contain parseable OME metadata. Pixel size is read
+    using the OME 2016-06 XML namespace. Image channels and axes are returned
+    unchanged, so callers should check their layout before extracting patches.
+    """
     import tifffile as tiff
 
     scale = -1
@@ -143,6 +168,38 @@ def register_physical_to_pixel(adata, transform_matrix, scale=1,
                                raw_key=['x_centroid', 'y_centroid'],
                                matrix_type='pixel2phsical',  # 'pixel2phsical'或者'physical2pixel'
                                prefix='image'):
+    """Transform physical cell coordinates into integer image coordinates.
+
+    Parameters
+    ----------
+    adata : anndata.AnnData
+        AnnData object containing physical coordinates in ``.obs``.
+    transform_matrix : numpy.ndarray of shape (3, 3)
+        Homogeneous coordinate transformation matrix. Its direction is
+        specified by ``matrix_type``.
+    scale : float, optional
+        Scale used to rescale the transformation matrix, defaulting to ``1``.
+        The matrix is multiplied by ``scale / scale_old``, where
+        ``scale_old`` is the Euclidean norm of its first two entries in the
+        first row. The bottom-right entry is then reset to ``1``.
+    raw_key : sequence of str, optional
+        Two ``.obs`` column names containing physical x and y coordinates,
+        respectively. Defaults to ``['x_centroid', 'y_centroid']``.
+    matrix_type : {'pixel2phsical', 'physical2pixel'}, optional
+        Direction of the supplied matrix. ``'pixel2phsical'`` (the default,
+        retaining the API's spelling) inverts the rescaled matrix before
+        applying it. ``'physical2pixel'`` applies it directly.
+    prefix : str, optional
+        Prefix for the output keys, defaulting to ``'image'``.
+
+    Returns
+    -------
+    anndata.AnnData
+        The input object, updated in place. Rounded integer coordinates in
+        x, y order are stored in ``.obsm[prefix + '_coor']``. Columns and
+        rows are also stored in ``.obs[prefix + '_col']`` and
+        ``.obs[prefix + '_row']``, respectively.
+    """
     scale_old = np.sqrt(transform_matrix[0, 0] ** 2 + transform_matrix[0, 1] ** 2)
     scale = scale / scale_old
     transform_matrix = transform_matrix * scale
@@ -165,6 +222,44 @@ def register_physical_to_pixel(adata, transform_matrix, scale=1,
 
 
 def tiling_HE_patches(args, adata, img, key='image_coor', get_filter=False):  # iStar中说，单细胞大小约为8um*8um
+    """Extract square H&E image patches centered on cell coordinates.
+
+    Parameters
+    ----------
+    args : argparse.Namespace or object
+        Configuration with ``cell_diameter`` and either ``scale`` or
+        ``resolution`` attributes. When ``cell_diameter > 0``, the patch
+        radius in pixels is ``round(cell_diameter / scale / 2)``; diameter
+        and physical pixel size must use the same units. Otherwise, the
+        radius is ``int(resolution / 2)``.
+    adata : anndata.AnnData
+        AnnData object with image coordinates in ``.obsm[key]``, arranged
+        as x (column), y (row) for each observation.
+    img : numpy.ndarray of shape (height, width, channels)
+        H&E image with pixel values on the 0--255 scale.
+    key : str, optional
+        Key in ``adata.obsm`` containing image coordinates. Defaults to
+        ``'image_coor'``.
+    get_filter : bool, optional
+        Currently unused. Neither value adds a filter mask to the return
+        values.
+
+    Returns
+    -------
+    he_patches : torch.Tensor
+        Stacked image patches with shape
+        ``(n_retained_cells, 2 * patch_radius, 2 * patch_radius, channels)``.
+        Pixel values are divided by ``255.0``.
+    adata : anndata.AnnData
+        AnnData object after removing cells whose patches would cross the
+        image boundaries. Its observation order matches ``he_patches``, and
+        ``.obsm[key]`` is converted to integer coordinates.
+
+    Notes
+    -----
+    Use the returned AnnData object to keep observations aligned with the
+    extracted patches. At least one cell must remain after boundary filtering.
+    """
     print('======================== Tiling HE patches for each single cells ===========================')
     if args.cell_diameter > 0:
         patch_radius = np.round(args.cell_diameter / args.scale / 2).astype(int)  # 映射到pixel
@@ -189,6 +284,47 @@ def tiling_HE_patches(args, adata, img, key='image_coor', get_filter=False):  # 
 
 
 def extract_HE_patches_representation(args, he_patches, store_key=None, adata=None, skip_embedding=False):
+    """Extract image encoder representations from H&E patches in batches.
+
+    Parameters
+    ----------
+    args : argparse.Namespace or object
+        Configuration with ``img_batch_size`` (patches per batch),
+        ``image_encoder`` (model name accepted by
+        :func:`SpaWeaver.utils.create_ImageEncoder`), and ``device`` (PyTorch
+        device). Only ``img_batch_size`` is used when ``skip_embedding=True``.
+    he_patches : torch.Tensor
+        Floating-point RGB patches with values in [0, 1], shaped
+        ``(n_patches, height, width, 3)`` or
+        ``(n_patches, 3, height, width)``. A single three-dimensional patch
+        is also accepted. Use a CPU tensor when ``skip_embedding=True``.
+    store_key : str or None, optional
+        If a string, also store the returned array in ``adata.obsm[store_key]``.
+        Defaults to ``None``, which disables storage.
+    adata : anndata.AnnData or None, optional
+        AnnData object aligned with the input patches. Required when
+        ``store_key`` is a string; its observation count must match the
+        number of patches.
+    skip_embedding : bool, optional
+        If ``True``, return resized and normalized image arrays without
+        creating or running an image encoder. Defaults to ``False``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Image features, typically shaped ``(n_patches, n_features)``, where
+        the feature dimension depends on the encoder. When
+        ``skip_embedding=True``, returns channel-first image arrays shaped
+        ``(n_patches, 3, resized_height, resized_width)`` instead.
+
+    Notes
+    -----
+    Patches are converted to channel-first layout, resized so that the
+    shorter edge is 224 pixels, and normalized using ImageNet channel means
+    ``(0.485, 0.456, 0.406)`` and standard deviations
+    ``(0.229, 0.224, 0.225)``. Encoder inference runs in evaluation mode
+    without gradient computation.
+    """
     import torchvision.transforms as transforms
     from .utils import create_ImageEncoder
 
@@ -297,17 +433,67 @@ def preprocess_protein(adata):
     
 def build_graph(x, weighted=False, symmetric=False, graph_type='radius', metric='euclidean', self_loop=True,
                 radius=50, num_neighbors=50, apply_normalize='none', sigma=0.01, return_type='csr', device=None):
-    '''
-    graph_type: str,    'radius' will connect the nodes within the radius(50 by default),
-                        'knn' will connect the num_neighbors(50 by default) nearest neighbors
+    """Build a sparse neighborhood graph from coordinates or feature vectors.
 
-    weighted:   str,    'reciprocal' will lead to calculate the reciprocal of the distance as a weight
-                        'gaussian' will lead to calculate the gaussian kernel as a weight, sigma is 1.5 by default
-                        'none' will generate a binary adj
+    Parameters
+    ----------
+    x : numpy.ndarray of shape (n_nodes, n_features)
+        Coordinates or feature vectors used to find neighboring nodes.
+    weighted : bool or str, optional
+        ``False`` (the default) assigns unit weights. ``'reciprocal'`` uses
+        inverse distances. ``'gaussian'`` or any other truthy value uses the
+        exponential weighting formula described in Notes. Use ``False``,
+        not the string ``'none'``, for an unweighted graph.
+    symmetric : bool, optional
+        If ``True``, symmetrize the adjacency by taking the larger weight
+        for each pair of opposite edges before normalization. Defaults to
+        ``False``.
+    graph_type : {'radius', 'knn'}, optional
+        Neighborhood rule. ``'radius'`` (the default) connects nodes within
+        ``radius``; ``'knn'`` queries ``num_neighbors`` nearest neighbors.
+    metric : {'euclidean', 'cosine'}, optional
+        Distance mode, defaulting to ``'euclidean'``. ``'cosine'`` first
+        L2-normalizes input rows; neighbor searches still use Euclidean
+        distance on those rows. For weighted graphs, the resulting
+        distances are converted to cosine distances as ``d ** 2 / 2``.
+    self_loop : bool, optional
+        Whether to retain diagonal edges from the neighbor query. If
+        ``False``, diagonal weights are set to zero. Defaults to ``True``.
+    radius : float, optional
+        Search radius for ``graph_type='radius'``, defaulting to ``50``.
+        With ``metric='cosine'``, this is a Euclidean radius on normalized
+        vectors, not a cosine-distance threshold.
+    num_neighbors : int, optional
+        Number of neighbors queried for ``graph_type='knn'``, defaulting to
+        ``50``. The query includes the node itself before optional diagonal
+        removal. Must not exceed the number of nodes.
+    apply_normalize : {'none', 'row', 'col', 'both', 'gcn', 'bipart_gcn', 'hpnn'}, optional
+        Normalization passed to ``normalize_graph`` after diagonal removal
+        and symmetrization. Defaults to ``'none'``.
+    sigma : float, optional
+        Scale parameter in the exponential weighting formula, defaulting
+        to ``0.01``. Unused for unit or reciprocal weights.
+    return_type : {'csr', 'coo'}, optional
+        SciPy sparse output format when ``device`` is ``None``. Defaults
+        to ``'csr'``.
+    device : str, torch.device or None, optional
+        If provided, convert the adjacency to a float32 PyTorch sparse COO
+        tensor on this device. Defaults to ``None``.
 
-    symmetric:  bool    False will directly return the adj
-                        True will makes adj[i, j] = adj[j, i]
-    '''
+    Returns
+    -------
+    scipy.sparse.csr_matrix or scipy.sparse.coo_matrix or torch.Tensor
+        Adjacency of shape ``(n_nodes, n_nodes)``. Rows and columns follow
+        the order of ``x``. The output type is controlled by ``return_type``
+        and ``device``.
+
+    Notes
+    -----
+    For a weighting distance ``d``, the implemented exponential weight is
+    ``exp(-(d ** 2) * sigma ** 2 / 2) / (2 * pi * sigma ** 2)``.
+    Reciprocal weights do not guard against zero distances, including
+    self-distances and coincident points.
+    """
     metric = metric.lower()
     apply_normalize = apply_normalize.lower()
     graph_type = graph_type.lower()

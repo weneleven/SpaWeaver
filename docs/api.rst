@@ -41,3 +41,13 @@ The following functions are available through ``SpaWeaver.pp``.
 .. autofunction:: SpaWeaver.preprocess.load_he_emb
 
 .. autofunction:: SpaWeaver.preprocess.mt_qc
+
+.. autofunction:: SpaWeaver.preprocess.read_HE_image
+
+.. autofunction:: SpaWeaver.preprocess.register_physical_to_pixel
+
+.. autofunction:: SpaWeaver.preprocess.tiling_HE_patches
+
+.. autofunction:: SpaWeaver.preprocess.extract_HE_patches_representation
+
+.. autofunction:: SpaWeaver.preprocess.build_graph
