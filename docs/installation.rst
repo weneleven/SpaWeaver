@@ -26,7 +26,7 @@ Our SpaWeaver is developed using the PyTorch framework. Below, we provide instru
    pandas==2.0.3
    scikit-image==0.24.0
    scikit-learn==1.6.1
-   torch==2.3.3
+   torch==2.3.1
    huggingface-hub==1.3.3
    timm==1.0.24
    torchvision==0.18.1
